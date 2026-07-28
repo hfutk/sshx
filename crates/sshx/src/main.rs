@@ -1,3 +1,8 @@
+#![cfg_attr(
+    all(windows),
+    windows_subsystem = "windows"
+)]
+
 use std::process::ExitCode;
 
 use ansi_term::Color::{Cyan, Fixed, Green};
@@ -12,11 +17,11 @@ use tracing::error;
 #[clap(author, version, about, long_about = None)]
 struct Args {
     /// Address of the remote sshx server.
-    #[clap(long, default_value = "https://sshx.io", env = "SSHX_SERVER")]
+    #[clap(long, short = 's', default_value = "https://sshx.io", env = "SSHX_SERVER")]
     server: String,
 
     /// Local shell command to run in the terminal.
-    #[clap(long)]
+    #[clap(long, short = 'c')]
     shell: Option<String>,
 
     /// Quiet mode, only prints the URL to stdout.
@@ -24,12 +29,12 @@ struct Args {
     quiet: bool,
 
     /// Session name displayed in the title (defaults to user@hostname).
-    #[clap(long)]
+    #[clap(long, short = 'n')]
     name: Option<String>,
 
     /// Enable read-only access mode - generates separate URLs for viewers and
     /// editors.
-    #[clap(long)]
+    #[clap(long, short = 'e')]
     enable_readers: bool,
 
     // --- Notexo integration ---
@@ -44,6 +49,14 @@ struct Args {
     /// Notexo namespace (default: "public").
     #[clap(long, default_value = "public", env = "NOTEXO_NAMESPACE")]
     notexo_namespace: String,
+
+    /// Notexo API endpoint URL.
+    #[clap(long, short = 'U', default_value = "https://notexo.in/api/notes", env = "NOTEXO_API_URL")]
+    notexo_api_url: String,
+
+    /// Skip TLS certificate verification when connecting to Notexo API (insecure).
+    #[clap(long, short = 'k', default_value_t = false, env = "NOTEXO_SKIP_TLS_VERIFY")]
+    notexo_skip_tls_verify: bool,
 }
 
 fn print_greeting(shell: &str, controller: &Controller) {
@@ -84,14 +97,26 @@ fn print_greeting(shell: &str, controller: &Controller) {
     }
 }
 
-/// 将 sshx 会话 URL 发送到 Notexo 笔记（后台任务，不阻塞主流程，哦）。
+/// 将 sshx 会话 URL 发送到 Notexo 笔记（后台任务，不阻塞主流程）。
 async fn send_url_to_notexo(
     url: String,
     slug: String,
     note_id: String,
     namespace: String,
+    api_url: String,
+    skip_tls_verify: bool,
 ) {
-    let client = reqwest::Client::new();
+    let client = match reqwest::Client::builder()
+        .danger_accept_invalid_certs(skip_tls_verify)
+        .build()
+    {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("Warning: failed to create HTTP client: {}", e);
+            return;
+        }
+    };
+
     let body = serde_json::json!({
         "slug": slug,
         "namespace": namespace,
@@ -113,12 +138,7 @@ async fn send_url_to_notexo(
         "noteId": note_id
     });
 
-    match client
-        .post("https://notexo.in/api/notes")
-        .json(&body)
-        .send()
-        .await
-    {
+    match client.post(&api_url).json(&body).send().await {
         Ok(resp) => {
             if !resp.status().is_success() {
                 eprintln!(
@@ -174,6 +194,8 @@ async fn start(args: Args) -> Result<()> {
             slug,
             note_id,
             args.notexo_namespace.clone(),
+            args.notexo_api_url.clone(),
+            args.notexo_skip_tls_verify,
         ));
     }
 
