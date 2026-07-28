@@ -8,83 +8,88 @@ on:
     branches:
       - main
 
+permissions:
+  contents: write
+
 jobs:
   rustfmt:
     name: Rust format
     runs-on: ubuntu-latest
-
     steps:
       - uses: actions/checkout@v4
-
       - run: rustup toolchain install nightly --profile minimal -c rustfmt
-
       - run: cargo +nightly fmt -- --check
 
   rust:
     name: Rust lint and test
     runs-on: ubuntu-latest
-
     steps:
       - uses: actions/checkout@v4
-
       - uses: arduino/setup-protoc@v2
-
       - run: rustup toolchain install stable
-
       - uses: Swatinem/rust-cache@v2
-
       - run: cargo test
-
       - run: cargo clippy --all-targets -- -D warnings
 
   windows_test:
     name: Client test (Windows)
     runs-on: windows-latest
-
     steps:
       - uses: actions/checkout@v4
-
       - uses: arduino/setup-protoc@v2
-
       - run: rustup toolchain install stable
-
       - uses: Swatinem/rust-cache@v2
-
       - run: cargo test -p sshx
 
   web:
     name: Web lint, check, and build
     runs-on: ubuntu-latest
-
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-node@v4
         with:
           node-version: "18"
-
       - run: npm ci
-
       - run: npm run lint
-
       - run: npm run check
-
       - run: npm run build
 
-  deploy:
-    name: Deploy
+  create_release:
+    name: Create release
     runs-on: ubuntu-latest
+    needs: [rustfmt, rust, windows_test, web]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: [rustfmt, rust, web]
-    concurrency:
-      group: deploy
-      cancel-in-progress: true
-
     steps:
       - uses: actions/checkout@v4
-
-      - uses: superfly/flyctl-actions/setup-flyctl@v1
-
-      - run: flyctl deploy
+      - name: Create/update nightly release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: nightly
+          name: Nightly Build
+          body: Automatic build from the main branch.
+          prerelease: true
         env:
-          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  upload:
+    name: Upload binaries (${{ matrix.os }})
+    needs: create_release
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: arduino/setup-protoc@v2
+      - run: rustup toolchain install stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build binary
+        run: cargo build --release -p sshx
+      - name: Upload to release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: nightly
+          files: |
+            target/release/sshx${{ matrix.os == 'windows-latest' && '.exe' || '' }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
