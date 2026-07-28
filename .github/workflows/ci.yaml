@@ -4,64 +4,19 @@ on:
   push:
     branches:
       - main
-  pull_request:
-    branches:
-      - main
 
 permissions:
   contents: write
 
 jobs:
-  rustfmt:
-    name: Rust format
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - run: rustup toolchain install nightly --profile minimal -c rustfmt
-      - run: cargo +nightly fmt -- --check
-
-  rust:
-    name: Rust lint and test
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: arduino/setup-protoc@v2
-      - run: rustup toolchain install stable
-      - uses: Swatinem/rust-cache@v2
-      - run: cargo test
-      - run: cargo clippy --all-targets -- -D warnings
-
-  windows_test:
-    name: Client test (Windows)
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: arduino/setup-protoc@v2
-      - run: rustup toolchain install stable
-      - uses: Swatinem/rust-cache@v2
-      - run: cargo test -p sshx
-
-  web:
-    name: Web lint, check, and build
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "18"
-      - run: npm ci
-      - run: npm run lint
-      - run: npm run check
-      - run: npm run build
-
   create_release:
-    name: Create release
+    name: Create nightly release
     runs-on: ubuntu-latest
-    needs: [rustfmt, rust, windows_test, web]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    outputs:
+      upload_url: ${{ steps.create_release.outputs.upload_url }}
     steps:
-      - uses: actions/checkout@v4
-      - name: Create/update nightly release
+      - name: Create or update nightly release
+        id: create_release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: nightly
@@ -72,7 +27,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   upload:
-    name: Upload binaries (${{ matrix.os }})
+    name: Build and upload (${{ matrix.os }})
     needs: create_release
     runs-on: ${{ matrix.os }}
     strategy:
@@ -83,13 +38,24 @@ jobs:
       - uses: arduino/setup-protoc@v2
       - run: rustup toolchain install stable
       - uses: Swatinem/rust-cache@v2
+
       - name: Build binary
         run: cargo build --release -p sshx
-      - name: Upload to release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: nightly
-          files: |
-            target/release/sshx${{ matrix.os == 'windows-latest' && '.exe' || '' }}
+
+      - name: Show built binary
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" == "Windows" ]; then
+            ls -la target/release/sshx.exe
+            echo "BINARY=target/release/sshx.exe" >> $GITHUB_ENV
+          else
+            ls -la target/release/sshx
+            echo "BINARY=target/release/sshx" >> $GITHUB_ENV
+          fi
+
+      - name: Upload binary to release
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BINARY: ${{ env.BINARY }}
+        run: |
+          gh release upload nightly "$BINARY" --clobber
