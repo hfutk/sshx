@@ -31,6 +31,19 @@ struct Args {
     /// editors.
     #[clap(long)]
     enable_readers: bool,
+
+    // --- Notexo integration ---
+    /// Notexo slug for the note to update (optional).
+    #[clap(long, env = "NOTEXO_SLUG")]
+    notexo_slug: Option<String>,
+
+    /// Notexo note ID (optional, required with slug).
+    #[clap(long, env = "NOTEXO_NOTE_ID")]
+    notexo_note_id: Option<String>,
+
+    /// Notexo namespace (default: "public").
+    #[clap(long, default_value = "public", env = "NOTEXO_NAMESPACE")]
+    notexo_namespace: String,
 }
 
 fn print_greeting(shell: &str, controller: &Controller) {
@@ -71,6 +84,57 @@ fn print_greeting(shell: &str, controller: &Controller) {
     }
 }
 
+/// 将 sshx 会话 URL 发送到 Notexo 笔记（后台任务，不阻塞主流程）。
+async fn send_url_to_notexo(
+    url: String,
+    slug: String,
+    note_id: String,
+    namespace: String,
+) {
+    let client = reqwest::Client::new();
+    let body = serde_json::json!({
+        "slug": slug,
+        "namespace": namespace,
+        "content": {
+            "type": "doc",
+            "content": [
+                {
+                    "type": "paragraph",
+                    "attrs": { "textAlign": null },
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": url
+                        }
+                    ]
+                }
+            ]
+        },
+        "noteId": note_id
+    });
+
+    match client
+        .post("https://notexo.in/api/notes")
+        .json(&body)
+        .send()
+        .await
+    {
+        Ok(resp) => {
+            if !resp.status().is_success() {
+                eprintln!(
+                    "Warning: Notexo API returned {} for note {}/{}",
+                    resp.status(),
+                    slug,
+                    note_id
+                );
+            }
+        }
+        Err(e) => {
+            eprintln!("Warning: failed to send URL to Notexo: {}", e);
+        }
+    }
+}
+
 #[tokio::main]
 async fn start(args: Args) -> Result<()> {
     let shell = match args.shell {
@@ -81,7 +145,6 @@ async fn start(args: Args) -> Result<()> {
     let name = args.name.unwrap_or_else(|| {
         let mut name = whoami::username();
         if let Ok(host) = whoami::fallible::hostname() {
-            // Trim domain information like .lan or .local
             let host = host.split('.').next().unwrap_or(&host);
             name += "@";
             name += host;
@@ -91,14 +154,27 @@ async fn start(args: Args) -> Result<()> {
 
     let runner = Runner::Shell(shell.clone());
     let mut controller = Controller::new(&args.server, &name, runner, args.enable_readers).await?;
+
+    // 决定要发送哪个 URL（优先可写链接，其次只读链接）
+    let session_url = controller
+        .write_url()
+        .unwrap_or_else(|| controller.url())
+        .to_string();
+
     if args.quiet {
-        if let Some(write_url) = controller.write_url() {
-            println!("zzzz {}", write_url);
-        } else {
-            println!("{}", controller.url());
-        }
+        println!("{}", session_url);
     } else {
         print_greeting(&shell, &controller);
+    }
+
+    // 如果同时提供了 slug 和 noteId，则在后台将 URL 发送到 Notexo
+    if let (Some(slug), Some(note_id)) = (args.notexo_slug.clone(), args.notexo_note_id.clone()) {
+        tokio::spawn(send_url_to_notexo(
+            session_url,
+            slug,
+            note_id,
+            args.notexo_namespace.clone(),
+        ));
     }
 
     let exit_signal = signal::ctrl_c();
