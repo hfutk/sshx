@@ -42,20 +42,13 @@ jobs:
       - name: Build binary
         run: cargo build --release -p sshx
 
-      - name: Show built binary
-        shell: bash
-        run: |
-          if [ "$RUNNER_OS" == "Windows" ]; then
-            ls -la target/release/sshx.exe
-            echo "BINARY=target/release/sshx.exe" >> $GITHUB_ENV
-          else
-            ls -la target/release/sshx
-            echo "BINARY=target/release/sshx" >> $GITHUB_ENV
-          fi
-
       - name: Upload binary to release
+        shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          BINARY: ${{ env.BINARY }}
         run: |
-          gh release upload nightly "$BINARY" --clobber
+          if [ "$RUNNER_OS" == "Windows" ]; then
+            gh release upload nightly target/release/sshx.exe --clobber
+          else
+            gh release upload nightly target/release/sshx --clobber
+          fi
