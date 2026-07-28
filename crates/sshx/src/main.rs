@@ -84,7 +84,7 @@ fn print_greeting(shell: &str, controller: &Controller) {
     }
 }
 
-/// 将 sshx 会话 URL 发送到 Notexo 笔记（后台任务，不阻塞主流程）。
+/// 将 sshx 会话 URL 发送到 Notexo 笔记（后台任务，不阻塞主流程，哦）。
 async fn send_url_to_notexo(
     url: String,
     slug: String,
